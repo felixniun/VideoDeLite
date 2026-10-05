@@ -1,5 +1,8 @@
 # VideoDelite
 
+> GitHub: https://github.com/felixniun/VideoDeLite
+
+
 简单、快速、本地优先的 Windows 视频压缩工具。
 
 > 名称：**VideoDelite** · 平台：Windows 10 (Build 19041+) / Windows 11
