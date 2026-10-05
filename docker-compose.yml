@@ -1,0 +1,50 @@
+# VideoDelite account server + SQL Server 2022 on Linux.
+#
+#   docker compose up -d
+#   admin console:  http://<host>:8800/admin
+#
+# Change SA_PASSWORD / ADMIN_KEY / MAIL values before going live.
+# 国内拉取镜像慢时：db 镜像可改为
+#   docker.m.daocloud.io/mcr.microsoft.com/mssql/server:2022-latest
+# server 构建的镜像加速见 Dockerfile 头部注释。
+services:
+  db:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: videodelite-db
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "<SA_PASSWORD>"
+      MSSQL_PID: "Developer"
+    volumes:
+      - mssql-data:/var/opt/mssql
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P '<SA_PASSWORD>' -C -Q 'SELECT 1' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  server:
+    build: .
+    container_name: videodelite-server
+    ports:
+      - "8800:8800"
+    environment:
+      VIDEODELITE_DB_CONN: "sqlserver://sa:<SA_PASSWORD>@db:1433?database=videodelite&encrypt=disable"
+      VIDEODELITE_LISTEN: "0.0.0.0:8800"
+      VIDEODELITE_ADMIN_KEY: "<ADMIN_KEY>"
+      VIDEODELITE_JWT_SECRET_FILE: "/data/jwt.secret"
+      VIDEODELITE_MAIL_PROVIDER: "resend"
+      VIDEODELITE_MAIL_FROM: "VideoDelite <noreply@videodelite.898280.xyz>"
+      VIDEODELITE_MAIL_APIKEY: "<RESEND_API_KEY>"
+      VIDEODELITE_INVITE_REQUIRED: "0"
+    volumes:
+      - server-data:/data
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  mssql-data:
+  server-data:

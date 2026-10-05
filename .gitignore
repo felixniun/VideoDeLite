@@ -1,0 +1,40 @@
+# Build outputs
+build/bin/
+frontend/dist/
+frontend/node_modules/
+frontend/wailsjs/
+
+# Go
+*.test
+*.out
+vendor/
+
+# User data (never commit)
+*.db
+*.db-wal
+*.db-shm
+jwt.secret
+
+# Server config may contain credentials — keep local only
+cmd/videoserver/config.json
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Editors
+.idea/
+.vscode/
+
+# signing keys / certs
+*.pfx
+build/keys/
+
+# local deployment copy with real credentials
+debian/
+# build outputs
+build/dist/
+build/cache/
+# runtime data next to exe
+Data/
+.mimosa/

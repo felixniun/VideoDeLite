@@ -1,0 +1,31 @@
+{
+  "_comment": "生产/外网部署示例。复制为 config.json 并按需修改。当前内网测试配置见 config.json。",
+
+  "listen": "0.0.0.0:443",
+
+  "db": {
+    "connection": "sqlserver://sa:<强密码>@<外网地址>:1433?database=videodelite&encrypt=true&TrustServerCertificate=false",
+    "autoCreateDatabase": false
+  },
+
+  "_mail_说明": "发信使用 Resend（https://resend.com）。首次使用步骤：",
+  "_mail_步骤1": "1. 注册 Resend 并在 Dashboard → Domains 添加你的域名（Cloudflare 托管域名可直接验证）",
+  "_mail_步骤2": "2. Resend 会给出 DNS 记录，到 Cloudflare DNS 面板添加（全部关闭代理/灰云）:",
+  "_mail_步骤2明细": "   MX  记录: send.yourdomain.com → feedback-smtp.resend.com 优先级 10",
+  "_mail_步骤2明细2": "   TXT 记录: send.yourdomain.com → \"v=spf1 include:amazonses.com ~all\"",
+  "_mail_步骤2明细3": "   TXT 记录: resend._domainkey.yourdomain.com → Resend 提供的 DKIM 值",
+  "_mail_步骤3": "3. 等待验证通过后创建 API Key（re_ 开头）填入下方 apiKey",
+  "_mail_步骤4": "4. from 地址的域名必须是 Resend 中已验证的域名（可用子域如 mail.yourdomain.com）",
+  "mail": {
+    "provider": "resend",
+    "from": "VideoDelite <noreply@mail.yourdomain.com>",
+    "apiKey": "re_替换为你的APIKey"
+  },
+
+  "inviteRequired": true,
+  "devEchoMail": false,
+  "adminKey": "<设置强随机管理密钥>",
+  "jwtSecretFile": "C:/videodelite/jwt.secret",
+  "accessTtlMinutes": 15,
+  "refreshTtlDays": 30
+}

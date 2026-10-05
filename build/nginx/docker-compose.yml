@@ -1,0 +1,12 @@
+services:
+  nginx:
+    image: nginx:alpine
+    container_name: nginx-proxy
+    restart: unless-stopped
+    ports:
+      - "80:80"        # 仅跳转 https（外网被 ISP 封，内网可用）
+      - "8443:443"     # Cloudflare 备用 HTTPS 端口 8443 → 容器 443
+    volumes:
+      - ./conf.d:/etc/nginx/conf.d:ro
+      - ./certbot-webroot:/var/www/certbot:ro
+      - ./certs:/etc/nginx/certs:ro

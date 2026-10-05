@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VideoDelite 管理后台</title>
+<style>
+  :root {
+    --bg: #f5f5f7; --card: #fff; --inset: #ebebef;
+    --text: #1d1d1f; --text2: #6e6e73; --sep: rgba(0,0,0,.08);
+    --accent: #0a84ff; --red: #ff453a; --green: #30d158;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body { font-family: -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif; background: var(--bg); color: var(--text); padding: 24px; }
+  h1 { font-size: 22px; letter-spacing: -.3px; margin-bottom: 16px; }
+  .card { background: var(--card); border-radius: 18px; box-shadow: 0 1px 3px rgba(0,0,0,.05), 0 4px 16px rgba(0,0,0,.05); padding: 18px 22px; margin-bottom: 16px; }
+  .row { display: flex; gap: 10px; align-items: center; }
+  input { background: var(--inset); border: 1.5px solid transparent; border-radius: 12px; padding: 9px 12px; font: inherit; outline: none; }
+  input:focus { border-color: var(--accent); }
+  button { font: inherit; border: none; border-radius: 980px; padding: 8px 18px; font-weight: 600; cursor: pointer; background: var(--inset); }
+  button.primary { background: var(--accent); color: #fff; }
+  button.danger { background: rgba(255,69,58,.12); color: var(--red); }
+  button.small { padding: 4px 12px; font-size: 12.5px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  th { text-align: left; color: var(--text2); font-size: 12px; text-transform: uppercase; letter-spacing: .4px; padding: 8px 10px; border-bottom: 1px solid var(--sep); }
+  td { padding: 9px 10px; border-bottom: 1px solid var(--sep); }
+  tr:last-child td { border-bottom: none; }
+  .badge { display: inline-block; padding: 2px 9px; border-radius: 980px; font-size: 11.5px; font-weight: 600; background: var(--inset); color: var(--text2); }
+  .badge.ok { background: rgba(48,209,88,.15); color: var(--green); }
+  .badge.bad { background: rgba(255,69,58,.14); color: var(--red); }
+  h2 { font-size: 13px; color: var(--text2); text-transform: uppercase; letter-spacing: .4px; margin-bottom: 12px; }
+  #login { max-width: 420px; margin: 8vh auto; text-align: center; }
+  #login input { width: 100%; margin: 10px 0; }
+  #login button { width: 100%; margin-top: 8px; }
+  .muted { color: var(--text2); font-size: 12.5px; }
+  #app { max-width: 960px; margin: 0 auto; }
+  .actions { display: flex; gap: 6px; }
+</style>
+</head>
+<body>
+<div id="login" class="card">
+  <h1>VideoDelite 管理后台</h1>
+  <p class="muted" style="margin-bottom:12px">输入管理密钥（config.json 的 adminKey）</p>
+  <input id="key" type="password" placeholder="Admin Key">
+  <button class="primary" onclick="login()">进入</button>
+  <p id="loginErr" class="muted" style="color:var(--red);margin-top:10px"></p>
+</div>
+
+<div id="app" style="display:none">
+  <h1>VideoDelite 管理后台</h1>
+
+  <div class="card">
+    <h2>账号</h2>
+    <table id="accounts"><thead><tr>
+      <th>ID</th><th>用户名</th><th>邮箱</th><th>状态</th><th>邮箱验证</th><th>注册时间</th><th>操作</th>
+    </tr></thead><tbody></tbody></table>
+  </div>
+
+  <div class="card">
+    <h2>安全事件（最近 100 条）</h2>
+    <table id="events"><thead><tr>
+      <th>ID</th><th>账号</th><th>类型</th><th>详情</th><th>时间</th>
+    </tr></thead><tbody></tbody></table>
+  </div>
+
+  <div class="row">
+    <button onclick="loadAll()">刷新</button>
+    <button onclick="logout()">退出管理</button>
+    <span class="muted">本控制台完全免费：V1 对所有已验证账号自动签发专业授权，商业化权益流程预留接口。</span>
+  </div>
+</div>
+
+<script>
+const KEY = 'vd_admin_key';
+const headers = () => ({ 'X-Admin-Key': localStorage.getItem(KEY) || '', 'Content-Type': 'application/json' });
+
+async function api(path, opts) {
+  const r = await fetch(path, { headers: headers(), ...opts });
+  if (r.status === 403) { logout(true); throw new Error('invalid key'); }
+  return r.json();
+}
+
+function login() {
+  localStorage.setItem(KEY, document.getElementById('key').value.trim());
+  loadAll().then(() => {
+    document.getElementById('login').style.display = 'none';
+    document.getElementById('app').style.display = 'block';
+  }).catch(e => {
+    document.getElementById('loginErr').textContent = '密钥无效或服务端未启用管理接口';
+  });
+}
+
+function logout(clearOnly) {
+  localStorage.removeItem(KEY);
+  if (clearOnly) location.reload();
+  document.getElementById('app').style.display = 'none';
+  document.getElementById('login').style.display = 'block';
+  document.getElementById('loginErr').textContent = '';
+}
+
+async function loadAll() {
+  const acc = await api('/api/v1/admin/accounts');
+  const tb = document.querySelector('#accounts tbody');
+  tb.innerHTML = '';
+  for (const a of (acc.accounts || [])) {
+    const tr = document.createElement('tr');
+    const st = a.Status === 'active'
+      ? '<span class="badge ok">active</span>'
+      : '<span class="badge bad">' + a.Status + '</span>';
+    const ev = a.EmailVerified ? '<span class="badge ok">已验证</span>' : '<span class="badge">未验证</span>';
+    tr.innerHTML = `<td>${a.ID}</td><td>${esc(a.Username)}</td><td>${esc(a.Email)}</td><td>${st}</td><td>${ev}</td><td>${new Date(a.CreatedAt).toLocaleString()}</td>
+      <td><div class="actions">
+        <button class="small" onclick="ban(${a.ID}, ${a.Status === 'active'})">${a.Status === 'active' ? '封禁' : '解封'}</button>
+        <button class="small danger" onclick="revoke(${a.ID})">撤销授权</button>
+      </div></td>`;
+    tb.appendChild(tr);
+  }
+
+  const ev = await api('/api/v1/admin/security-events');
+  const et = document.querySelector('#events tbody');
+  et.innerHTML = '';
+  for (const e of (ev.events || []).slice(0, 100)) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${e.ID}</td><td>${e.AccountID}</td><td>${esc(e.Kind)}</td><td>${esc(e.Detail)}</td><td>${new Date(e.CreatedAt).toLocaleString()}</td>`;
+    et.appendChild(tr);
+  }
+}
+
+async function ban(id, currentlyActive) {
+  await api(`/api/v1/admin/accounts/${id}/` + (currentlyActive ? 'ban' : 'unban'), { method: 'POST' });
+  loadAll();
+}
+async function revoke(id) {
+  if (!confirm('撤销该账号的全部 Professional 授权？（客户端新任务将被锁定，正在运行的任务不受影响）')) return;
+  await api(`/api/v1/admin/accounts/${id}/revoke-licenses`, { method: 'POST' });
+  loadAll();
+}
+
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+# keep the docker build context small
+build/
+frontend/
+installer/
+tools/
+docs/
+*.md
+*.db
+*.db-wal
+*.db-shm
+jwt.secret
+.git/
+.vscode/
+.idea/
+dist/
