@@ -151,6 +151,162 @@ VideoDelite/
 - `videodelite/`：docker compose（server + SQL Server）
 - `nginx-proxy/`：反代容器（28443→443）+ conf.d + certs（acme.sh 自动续期写入）
 
+---
+
+## 5.1 全项目文件图鉴（107 个文件逐项说明）
+
+### 🖥️ 桌面客户端（根目录 Go 文件 + internal/）
+
+| 文件 | 职责 |
+|---|---|
+| `main.go` | 程序入口：启动前检测 WebView2 → 初始化 App → 拉起 Wails 窗口 |
+| `app.go` | 绑定层（前端可调的全部方法）：分析/建任务/历史/设置/账号/日志导出 |
+| `cli.go` | `--cli` 无头模式：analyze/encode 命令（CI 与自动化测试用） |
+| `platform_windows.go` | 【仅Windows】读系统语言、系统深浅色主题 |
+| `platform_other.go` | 【非Windows】上面俩功能的空实现（保证跨平台可编译） |
+| `webview2_windows.go` | 【仅Windows】启动前注册表检测 WebView2，缺失弹窗引导官网（禁止静默装） |
+| `webview2_other.go` | 【非Windows】WebView2 检测空实现 |
+| `webviewdata.go` | WebView2 缓存重定向到 `Data\WebView2`（不散落 Roaming） |
+| `go.mod` / `go.sum` | Go 模块定义与依赖锁（模块名 videodelite） |
+| `wails.json` | Wails 构建配置（产物名、前端构建命令、版本信息） |
+
+### 📦 internal/ —— 客户端核心逻辑（14 个包，Go 惯例：外部不可引用）
+
+| 包 / 文件 | 职责 |
+|---|---|
+| **media/** `mediainfo.go` | MediaInfo 数据模型 + ffprobe JSON 解析（编码/分辨率/HDR/音轨/字幕/章节/旋转） |
+| **media/** `analyzer.go` | 分析器：调 ffprobe；ExpandPaths 递归扫描文件夹找视频 |
+| **encoder/** `bitrate.go` | §17 冻结码率表：H.264 分档；H.265×0.75；超4K按像素比+封顶；<720p下限1Mbps |
+| **encoder/** `hardware.go` | 编码器探测（真实跑 6 帧测试编码验证可用）+ 自动选择（硬件优先→CPU兜底） |
+| **encoder/** `builder.go` | 命令构建器：Simple/Pro → 各编码器原生参数映射（含 x265 HDR VUI 修复） |
+| **task/** `task.go` | 任务模型 + 状态集（等待/准备/编码/暂停/验证/完成/取消/失败） |
+| **task/** `manager.go` | 队列调度（信号量并发1-3）、暂停/恢复/取消、CPU 回退、冲突策略、历史落库、孤儿 Temp 清扫 |
+| **task/** `helpers.go` + `disk_windows/other.go` | 辅助函数；磁盘剩余空间检测（编码前预警） |
+| **ffmpegx/** `runner.go` | 启动 ffmpeg：解析 `-progress` 实时进度；stderr 收集（供错误分类） |
+| **ffmpegx/** `suspend_windows/other.go` | 线程级暂停/恢复（SuspendThread 内核调用） |
+| **ffmpegx/** `job_windows/other.go` | Job Object 绑命：主程序崩溃 → OS 自动杀 ffmpeg（防孤儿锁文件） |
+| **validation/** `validation.go` | 输出复检：容器/编码/分辨率/FPS/时长/音轨硬检查 + HDR/字幕/章节警告 |
+| **history/** `history.go` | SQLite 持久化（输入输出/编码器/压缩率/耗时/状态） |
+| **settings/** `settings.go` | 语言/主题/输出/冲突/默认编码/硬件开关/API地址（含历史迁移链）/并行数 |
+| **logging/** `logging.go` | 应用日志 7 天/500MB 上限；任务日志 20MB 上限后只记错误 |
+| **auth/** `auth.go` | 授权状态机（8 态）；Simple 永远可用；只门控新任务 |
+| **account/** `account.go` | 注册/验证/登录/激活/登出/删号 + 启动离线恢复 + 后台同步 |
+| **account/** `credentials_windows/other.go` | Token 存 Windows 凭据管理器（不明文落盘） |
+| **db/** `db.go` | SQLite 打开（WAL）+ 建表迁移 |
+| **paths/** `paths.go` | 数据目录：首选安装目录 `Data\`（可写检测），回退 %LOCALAPPDATA% |
+| **proc/** `proc.go` + `hide_windows.go` | 子进程统一封装（二进制校验）+ CREATE_NO_WINDOW 防黑框 |
+| **errs/** `errs.go` | 12 类错误码；判定是否允许触发 CPU 回退 |
+
+### 🌐 frontend/src/ —— Vue3 界面
+
+| 文件 | 职责 |
+|---|---|
+| `main.ts` / `App.vue` | 应用引导；无边框自绘标题栏 + 侧边导航骨架 |
+| `style.css` | 设计系统：苹果配色变量、深浅双主题、pill 按钮、圆角卡片、color-scheme |
+| `router/index.ts` | 5 页路由（懒加载） |
+| `i18n/index.ts` | 自研双语词典（中英全量，含专业模式 21 组标签） |
+| `services/wails.ts` | 桥接层：调 Go 绑定 / 订阅事件（浏览器开发时优雅降级） |
+| `stores/app.ts`、`tasks.ts` | 主题/语言/设置；任务列表 + 实时进度事件订阅 |
+| `types/index.ts` | Go 结构体的 TS 镜像（MediaInfo/TaskView/HistoryEntry…） |
+| `views/HomeView.vue` | 拖放导入 + Simple 配置 + Professional 全参数面板（并行/预估大小） |
+| `views/TasksView.vue` | 任务：实时进度条/速度/ETA、暂停恢复取消重试 |
+| `views/HistoryView.vue` | 历史：压缩率徽章、清空（不动视频） |
+| `views/SettingsView.vue` | 设置：语言/主题/输出/冲突/编码/日志/账号登录注册 |
+| `views/AboutView.vue` | 关于：版本/隐私承诺/开源声明/手动检查更新 |
+
+### 🗄️ server/ —— 账号服务端（net/http 标准库，无框架）
+
+| 文件 | 职责 |
+|---|---|
+| `handlers.go` | 全部 HTTP 端点：注册/验证/登录/刷新/登出/激活/设备/License/删号/admin（X-Admin-Key 保护） |
+| `store.go` | Store 接口定义 + AdminStats 类型（SQL Server / SQLite 双实现开关） |
+| `store_impl.go` | 全部 SQL 实现（占位符/日期方言适配） |
+| `placeholders.go` | `?` → `@pN` 方言重写层（MSSQL 兼容核心） |
+| `auth.go` | Argon2id 密码哈希/校验 + JWT 签发/解析 + Bearer 鉴权 |
+| `mailer.go` | SMTP 发信（备选通道，587/465） |
+| `resend.go` | Resend HTTP API 发信（主通道） |
+| `adminui.go` + `adminui.html` | 苹果深色管理台（自包含单文件）：6 统计卡 + SVG 注册趋势 + 事件分布 + 账号管理 |
+| `server_test.go` | 集成测试：全生命周期 + Resend mock（运行时生成密码，零字面量凭据） |
+
+### 🚀 cmd/videoserver/ —— 服务端入口
+
+| 文件 | 职责 |
+|---|---|
+| `main.go` | 装配：读配置 → 建库 → 开服务 |
+| `config.go` | config.json 解析 + 环境变量覆盖（Docker 友好） |
+| `config.json` | 真实运行配置（**gitignore**，含密码/Key） |
+| `config.example.json` | 模板：含 Cloudflare DNS 步骤注释（可提交） |
+
+### 🐳 Linux 部署 / 📦 build / 🧰 installer / 🧪 tools
+
+| 文件 | 职责 |
+|---|---|
+| `Dockerfile` | 两阶段：golang:alpine 编译 → debian:bookworm-slim 运行（GOPROXY 国内适配） |
+| `docker-compose.yml` | server + SQL Server2022 双容器（健康检查/数据卷/凭据占位符） |
+| `build/package.ps1` | 一键出安装包：wails build → 收集 ffmpeg(essentials) → NSIS |
+| `build/sign.ps1` | Authenticode 签名（测试证书，正式证书一键替换） |
+| `build/deploy-server.ps1` | 打服务端 Windows 部署 zip |
+| `build/deploy-admin.sh` | 管理台热更新脚本（SSH 部署用） |
+| `build/nginx/` | 反代配置留档（双域名 443 + acme 续期路径） |
+| `build/keys/test-signing.pfx` | 测试签名证书（**gitignore**） |
+| `build/bin`、`build/dist`、`build/cache` | 产物：绿色客户端 / NSIS 安装包 / ffmpeg 缓存（**gitignore**） |
+| `installer/installer.nsi` | NSIS 脚本：双语向导/升级覆盖/卸载保留数据(勾选才删)/Data 目录授权 |
+| `installer/THIRD-PARTY-NOTICES.txt` | FFmpeg GPL 来源声明（§80 红线） |
+| `tools/valmatrix` | Phase0 矩阵：真实编码验证 4 编码器 × 10bit/HDR/AAC → 生成报告 |
+| `tools/qamatrix` | Phase8 矩阵：生成测试源 → 走产品管线 → 对比保留 |
+| `tools/genicon` | 程序化生成应用图标 |
+
+### 📚 docs/ 与根配置
+
+| 文件 | 职责 |
+|---|---|
+| `docs/规划/VideoLite计划书.md` | 产品宪法（140 章冻结需求） |
+| `docs/规划/授权状态机规范.md` | 8 态状态机规则 |
+| `docs/规划/账号与本地压缩边界规范.md` | 账号域/视频域隔离 |
+| `docs/规划/VideoDelite MVP交付计划书.md` | 本文档 |
+| `docs/学习指南-从零到上线.md` | 小白复盘：20 个真实坑（现象→根因→解决→教训） |
+| `docs/DEPLOY-DEBIAN.md` | 服务器部署手册（镜像加速/防火墙/HTTPS/排障） |
+| `docs/TECHNICAL-VALIDATION.md`、`QA-PRESERVATION.md` | 两份实测报告 |
+| `docs/RELEASE-NOTES.md`、`PRIVACY-POLICY.md` | 版本说明 / 隐私政策 |
+| `.gitignore` / `.dockerignore` / `.zcodeignore` | 排除凭据/产物/缓存/服务器副本 |
+
+### 数据流（谁调谁）
+
+```
+用户拖入视频
+   ↓
+[frontend HomeView] → [wails.ts 桥] → [app.go 绑定]
+   ↓
+[media] ffprobe 分析 → MediaInfo
+   ↓
+[encoder] 码率表 → 探测选编码器 → BuildCommand 生成参数
+   ↓
+[task] 排队（并发1-3）→ [ffmpegx] 启动 ffmpeg（Job Object 绑命）
+   ↓                        ↑ 实时进度事件
+[validation] FFprobe 复检 ──失败──→ 任务 Failed
+   ↓ 通过
+[history] SQLite 落库 → TasksView 进度条
+
+账号线（完全独立）：
+[account] 登录/激活 → [auth] 状态机 → 只门控"能否新建 Professional 任务"
+                          （绝不触碰运行中的 ffmpeg —— 红线）
+```
+
+### "想改 X 应该动哪里"速查
+
+| 想改什么 | 去哪里 |
+|---|---|
+| 压缩画质档位/码率 | `internal/encoder/bitrate.go` |
+| 新增编码器（如 AV1） | `hardware.go` 探测 + `builder.go` 参数映射 |
+| 界面文案/新增语言 | `frontend/src/i18n/index.ts` |
+| 界面配色/圆角 | `frontend/src/style.css`（变量区） |
+| 授权规则 | `internal/auth/auth.go` |
+| 服务端 API | `server/handlers.go` |
+| 管理台界面 | `server/adminui.html`（自包含单文件） |
+| 数据库表结构 | 客户端 `internal/db/db.go`；服务端 `server/store.go` 迁移段 |
+| 安装包行为 | `installer/installer.nsi` |
+| 默认 API 地址 | `internal/settings/settings.go`（含历史地址迁移 switch） |
+
 ## 6. 已知限制与运维备忘
 
 | # | 事项 | 说明 |

@@ -85,6 +85,7 @@ func (s *Server) Routes() http.Handler {
 
 	// admin
 	mux.HandleFunc("GET /admin", s.handleAdminUI)
+	mux.HandleFunc("GET /api/v1/admin/stats", s.admin(s.handleAdminStats))
 	mux.HandleFunc("GET /api/v1/admin/accounts", s.admin(s.handleAdminAccounts))
 	mux.HandleFunc("POST /api/v1/admin/accounts/{id}/ban", s.admin(s.handleAdminBan(true)))
 	mux.HandleFunc("POST /api/v1/admin/accounts/{id}/unban", s.admin(s.handleAdminBan(false)))
@@ -597,6 +598,16 @@ func (s *Server) handleDeleteAccount(w http.ResponseWriter, r *http.Request, acc
 
 func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, jsonBody{"latest": "1.0.0", "channel": "stable"})
+}
+
+// handleAdminStats serves the dashboard aggregates (charts + cards).
+func (s *Server) handleAdminStats(w http.ResponseWriter, r *http.Request) {
+	st, err := s.store.AdminStats(r.Context())
+	if err != nil {
+		fail(w, 500, "stats failed: "+err.Error())
+		return
+	}
+	writeJSON(w, 200, st)
 }
 
 func (s *Server) handleAdminAccounts(w http.ResponseWriter, r *http.Request) {

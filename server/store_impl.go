@@ -372,6 +372,75 @@ func (s *SQLStore) ListSecurityEvents(ctx context.Context, limit int) ([]Securit
 	return out, rows.Err()
 }
 
+// AdminStats aggregates dashboard numbers. The 14-day registration series
+// is built in Go from a grouped query so gaps become zero buckets.
+// Day buckets: MSSQL CONVERT(…,23) and SQLite substr(…,1,10) both yield
+// "YYYY-MM-DD" from the stored timestamps.
+func (s *SQLStore) AdminStats(ctx context.Context) (AdminStats, error) {
+	var st AdminStats
+	one := func(q string) (int64, error) {
+		var n int64
+		err := s.qRowCtx(ctx, q).Scan(&n)
+		return n, err
+	}
+	var err error
+	if st.TotalAccounts, err = one(`SELECT COUNT(*) FROM accounts`); err != nil {
+		return st, err
+	}
+	if st.Verified, err = one(`SELECT COUNT(*) FROM accounts WHERE email_verified = 1`); err != nil {
+		return st, err
+	}
+	if st.Banned, err = one(`SELECT COUNT(*) FROM accounts WHERE status = 'banned'`); err != nil {
+		return st, err
+	}
+	if st.TotalDevices, err = one(`SELECT COUNT(*) FROM devices`); err != nil {
+		return st, err
+	}
+	if st.ActiveLicense, err = one(`SELECT COUNT(*) FROM licenses WHERE status = 'active'`); err != nil {
+		return st, err
+	}
+	if err := s.qRowCtx(ctx,
+		`SELECT COUNT(*) FROM security_events WHERE created_at >= ?`,
+		ts(time.Now().UTC().Add(-24*time.Hour))).Scan(&st.EventsToday); err != nil {
+		return st, err
+	}
+
+	// 14-day series
+	dayExpr := `substr(created_at, 1, 10)`
+	since := ts(time.Now().UTC().Add(-13 * 24 * time.Hour))
+	if s.dialect == "mssql" {
+		dayExpr = `CONVERT(varchar(10), created_at, 23)`
+	}
+	rows, err := s.qCtx(ctx,
+		`SELECT `+dayExpr+` AS d, COUNT(*) AS c FROM accounts
+		 WHERE created_at >= ? GROUP BY `+dayExpr+` ORDER BY d`, since)
+	if err != nil {
+		return st, err
+	}
+	defer rows.Close()
+	byDay := map[string]int64{}
+	for rows.Next() {
+		var d string
+		var c int64
+		if err := rows.Scan(&d, &c); err != nil {
+			return st, err
+		}
+		byDay[d] = c
+	}
+	if err := rows.Err(); err != nil {
+		return st, err
+	}
+	for i := 13; i >= 0; i-- {
+		day := time.Now().UTC().Add(-time.Duration(i) * 24 * time.Hour)
+		key := day.Format("2006-01-02")
+		st.Registrations = append(st.Registrations, DayCount{
+			Day:   day.Format("01-02"),
+			Count: byDay[key],
+		})
+	}
+	return st, nil
+}
+
 func (s *SQLStore) ListAccounts(ctx context.Context, limit int) ([]AccountView, error) {
 	rows, err := s.qCtx(ctx,
 		`SELECT id, username, email, status, email_verified, created_at

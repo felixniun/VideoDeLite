@@ -83,7 +83,27 @@ type Store interface {
 	ListAccounts(ctx context.Context, limit int) ([]AccountView, error)
 	ListDevices(ctx context.Context, accountID int64) ([]Device, error)
 
+	// AdminStats feeds the admin dashboard charts (Phase 10 GUI).
+	AdminStats(ctx context.Context) (AdminStats, error)
+
 	Ping() error
+}
+
+// AdminStats is the aggregate view for the admin dashboard.
+type AdminStats struct {
+	TotalAccounts  int64            `json:"totalAccounts"`
+	Verified       int64            `json:"verifiedAccounts"`
+	Banned         int64            `json:"bannedAccounts"`
+	TotalDevices   int64            `json:"totalDevices"`
+	ActiveLicense  int64            `json:"activeLicenses"`
+	EventsToday    int64            `json:"eventsToday"`
+	Registrations  []DayCount       `json:"registrations"` // last 14 days, gaps filled
+}
+
+// DayCount is one bucket of a time-series chart.
+type DayCount struct {
+	Day   string `json:"day"`   // MM-DD
+	Count int64  `json:"count"`
 }
 
 type SecurityEvent struct {
