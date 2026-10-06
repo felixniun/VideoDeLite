@@ -250,7 +250,8 @@ VideoDelite/
 | `build/package.ps1` | 一键出安装包：wails build → 收集 ffmpeg(essentials) → NSIS |
 | `build/sign.ps1` | Authenticode 签名（测试证书，正式证书一键替换） |
 | `build/deploy-server.ps1` | 打服务端 Windows 部署 zip |
-| `build/deploy-admin.sh` | 管理台热更新脚本（SSH 部署用） |
+| `build/deploy-admin.sh` | 管理台热更新脚本（SSH 部署用；密钥经 `VD_ADMIN_KEY` 环境变量传入，脚本零硬编码） |
+| `build/cache/deploy-*.json/yml`、`vd_deploy.sh` | 服务器部署专用真实配置与脚本（**gitignore**，含真实凭据，仅本地留存） |
 | `build/nginx/` | 反代配置留档（双域名 443 + acme 续期路径） |
 | `build/keys/test-signing.pfx` | 测试签名证书（**gitignore**） |
 | `build/bin`、`build/dist`、`build/cache` | 产物：绿色客户端 / NSIS 安装包 / ffmpeg 缓存（**gitignore**） |
