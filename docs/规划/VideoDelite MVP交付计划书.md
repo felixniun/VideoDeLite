@@ -155,6 +155,103 @@ VideoDelite/
 
 ## 5.1 全项目文件图鉴（107 个文件逐项说明）
 
+### 总目录树（全景）
+
+```
+VideoDelite/
+│
+├── 🖥️ 桌面客户端入口（根目录 Go 文件）
+│   ├── main.go                     # 入口：WebView2 检测 → 初始化 App → Wails 窗口
+│   ├── app.go                      # 绑定层（前端可调用的全部方法）
+│   ├── cli.go                      # --cli 无头模式（analyze/encode 自动化验证）
+│   ├── platform_windows.go         # 【Win】系统语言/主题读取
+│   ├── platform_other.go           # 【非Win】空实现（跨平台编译）
+│   ├── webview2_windows.go         # 【Win】WebView2 注册表检测 + 引导弹窗
+│   ├── webview2_other.go           # 【非Win】空实现
+│   ├── webviewdata.go              # WebView2 缓存重定向到 Data\WebView2
+│   └── go.mod / go.sum / wails.json
+│
+├── 📦 internal/ —— 客户端核心（14 包 36 文件，外部不可引用）
+│   ├── media/        analyzer.go + mediainfo.go          # FFprobe 分析 + 模型
+│   ├── encoder/      bitrate.go + hardware.go + builder.go   # 冻结码率表 / 探测选择 / 命令构建
+│   ├── task/         task.go + manager.go + helpers.go + disk_*.go   # 队列调度 / 磁盘检测
+│   ├── ffmpegx/      runner.go + suspend_*.go + job_*.go      # 进程管理 / 线程暂停 / 崩溃绑命
+│   ├── validation/   validation.go                     # 输出复检（exit 0 ≠ 成功）
+│   ├── history/      history.go                        # SQLite 历史持久化
+│   ├── settings/     settings.go                       # 设置 + API 地址迁移链 + 并行数
+│   ├── logging/      logging.go                        # 7天/500MB/20MB 日志红线
+│   ├── auth/         auth.go                           # 授权状态机（8 态）
+│   ├── account/      account.go + helpers.go + credentials_*.go  # 账号客户端 + 凭据管理器
+│   ├── db/           db.go                             # SQLite WAL + 迁移
+│   ├── paths/        paths.go                          # 数据目录（安装目录优先）
+│   ├── proc/         proc.go + hide_windows.go         # 子进程封装 + 防黑框
+│   └── errs/         errs.go                           # 12 类错误码 + 回退判定
+│
+├── 🌐 frontend/ —— Vue3 界面
+│   ├── index.html / package.json / vite.config.ts / tsconfig.json
+│   ├── public/appicon.png
+│   └── src/
+│       ├── main.ts / App.vue / style.css        # 引导 / 骨架(自绘标题栏) / 设计系统
+│       ├── router/index.ts                      # 5 页路由
+│       ├── i18n/index.ts                        # 中英双语词典
+│       ├── services/wails.ts                    # Go 桥接层
+│       ├── stores/    app.ts + tasks.ts         # 设置状态 / 任务+实时进度
+│       ├── types/index.ts                       # Go 结构体 TS 镜像
+│       └── views/     Home / Tasks / History / Settings / About (.vue × 5)
+│
+├── 🗄️ server/ —— 账号服务端（Gin + Viper，标准库风格业务）
+│   ├── handlers.go        # Gin 路由 + ginAuthed/ginAdmin 中间件 + UpdateRuntime 热更新
+│   ├── store.go           # Store 接口 + AdminStats（双数据库开关）
+│   ├── store_impl.go      # SQL 实现（MSSQL/SQLite 方言适配）
+│   ├── placeholders.go    # ? → @pN 方言重写层
+│   ├── auth.go            # Argon2id + JWT + Bearer
+│   ├── mailer.go / resend.go   # SMTP 备选 / Resend 主通道
+│   ├── adminui.go + adminui.html   # 管理台（统计卡+SVG图表，自包含）
+│   └── server_test.go + mailer_test.go   # 集成测试（全生命周期）
+│
+├── 🚀 cmd/videoserver/ —— 服务端入口
+│   ├── main.go            # Viper 装配 + 热更新监听 + 带超时的 http.Server
+│   ├── config.go          # Viper：config.json + 环境变量 + 轮询热更新
+│   ├── config.example.json # 模板（可提交）
+│   └── config.json        # 【本地 gitignore】真实运行配置
+│
+├── 🐳 Linux 部署
+│   ├── Dockerfile                    # 两阶段构建（GOPROXY 适配）
+│   ├── docker-compose.yml            # server + SQL Server（凭据占位符）
+│   └── .dockerignore
+│
+├── 📦 build/ —— 构建产物与脚本
+│   ├── package.ps1 / sign.ps1 / deploy-server.ps1 / deploy-admin.sh   # 四个自动化脚本
+│   ├── appicon.png / windows/(icon.ico, manifest, info.json)          # 图标与版本资源
+│   ├── nginx/ (videodelite1.conf, videodelite.conf, compose)          # 反代配置留档
+│   ├── keys/test-signing.pfx                          # 【本地 gitignore】测试证书
+│   ├── bin/VideoDelite.exe + Data\                    # 【本地】绿色版 + 运行数据
+│   ├── dist/…setup.exe / Server-deploy.zip / videoserver.exe   # 【本地】安装包/部署包
+│   └── cache/ffmpeg-essentials + deploy-*.{json,yml}  # 【本地】ffmpeg 缓存 + 真实部署配置
+│
+├── 🧰 installer/ —— Windows 安装包
+│   ├── installer.nsi                  # NSIS：双语向导/升级/卸载保留数据/Data 授权
+│   └── THIRD-PARTY-NOTICES.txt        # FFmpeg GPL 来源声明
+│
+├── 🧪 tools/ —— 实测工具
+│   ├── valmatrix/main.go              # Phase0 编码能力矩阵（真实编码）
+│   ├── qamatrix/main.go               # Phase8 媒体保留矩阵（真实管线）
+│   └── genicon/main.go                # 图标生成器
+│
+├── 📚 docs/
+│   ├── 规划/  VideoLite计划书 + 授权状态机规范 + 边界规范 + MVP交付计划书（本文档）
+│   ├── 学习指南-从零到上线.md              # 20 个真实坑复盘（小白向）
+│   ├── DEPLOY-DEBIAN.md                   # 服务器部署手册
+│   ├── TECHNICAL-VALIDATION.md / QA-PRESERVATION.md   # 实测报告 × 2
+│   └── RELEASE-NOTES.md / PRIVACY-POLICY.md
+│
+├── 🐧 debian/                       # 【本地 gitignore】服务器部署副本（含真实凭据）
+└── ⚙️ .gitignore / .dockerignore / .zcodeignore
+```
+
+> 图例：🖥️ 客户端 · 📦 客户端核心 · 🌐 界面 · 🗄️ 服务端 · 🚀 服务端入口 · 🐳 Linux 部署 · 📦 构建 · 🧰 安装包 · 🧪 工具 · 📚 文档
+> 【本地 gitignore】= 在您电脑上存在（产物/凭据），GitHub 仓库不含。
+
 ### 🖥️ 桌面客户端（根目录 Go 文件 + internal/）
 
 | 文件 | 职责 |
