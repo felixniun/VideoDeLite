@@ -1,11 +1,12 @@
-// VideoDelite account server (Phase 10) — entry point with config file.
+// VideoDelite account server (Phase 10) — entry point with Viper config.
 //
 // Usage:
 //
 //	videoserver -config config.json
 //
-// See config.json / config.example.json for all options. Environment
-// overrides: VIDEODELITE_DB_CONN, VIDEODELITE_ADMIN_KEY, VIDEODELITE_LISTEN.
+// Config precedence: VIDEODELITE_* env vars > config.json > defaults.
+// Hot reload: editing config.json applies admin key / mail / invite flag
+// at runtime (see config.go watch); listen and DB connection need restart.
 package main
 
 import (
@@ -17,7 +18,7 @@ import (
 )
 
 func main() {
-	cfg, err := loadConfig()
+	cfg, watch, err := loadConfig()
 	if err != nil {
 		log.Fatalf("config: %v", err)
 	}
@@ -38,6 +39,7 @@ func main() {
 		log.Fatalf("migrate: %v", err)
 	}
 
+	_, mailer := cfg.runtimeOptions()
 	srv := server.New(st, server.Options{
 		InviteRequired: cfg.InviteRequired,
 		DevEchoMail:    cfg.DevEchoMail,
@@ -45,31 +47,30 @@ func main() {
 		RefreshTTL:     time.Duration(cfg.RefreshTTLDays) * 24 * time.Hour,
 		JWTSecretFile:  cfg.JWTSecretFile,
 		AdminKey:       cfg.AdminKey,
-		Mailer:         buildMailer(cfg.Mail),
+		Mailer:         mailer,
 	})
+	// Hot reload: config.json edits apply admin key / mail / invite flag live.
+	watch(srv)
 
-	switch {
-	case cfg.Mail.Provider == "resend":
+	switch cfg.Mail.Provider {
+	case "resend":
 		log.Printf("mail: Resend API (from %s)", cfg.Mail.From)
-	case cfg.Mail.Provider == "smtp":
+	case "smtp":
 		log.Printf("mail: SMTP %s:%d", cfg.Mail.SMTP.Host, cfg.Mail.SMTP.Port)
 	default:
 		log.Printf("mail: DEV ECHO mode — verification codes are returned in responses, NOT emailed")
 	}
 
 	log.Printf("VideoDelite account server listening on %s (db: sql server)", cfg.Listen)
-	if err := http.ListenAndServe(cfg.Listen, srv.Routes()); err != nil {
+	hs := &http.Server{
+		Addr:              cfg.Listen,
+		Handler:           srv.Routes(),
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+	if err := hs.ListenAndServe(); err != nil {
 		log.Fatal(err)
 	}
-}
-
-// buildMailer selects the verification-email sender. nil = dev-echo.
-func buildMailer(m MailConfig) server.Mailer {
-	switch m.Provider {
-	case "resend":
-		return server.NewResendMailer(m.APIKey, m.From)
-	case "smtp":
-		return server.NewSMTPMailer(m.SMTP)
-	}
-	return nil
 }

@@ -218,7 +218,7 @@ VideoDelite/
 
 | 文件 | 职责 |
 |---|---|
-| `handlers.go` | 全部 HTTP 端点：注册/验证/登录/刷新/登出/激活/设备/License/删号/admin（X-Admin-Key 保护） |
+| `handlers.go` | **Gin 路由与全部 HTTP 端点**：注册/验证/登录/刷新/登出/激活/设备/License/删号/admin；`ginAuthed`（Bearer）/`ginAdmin`（X-Admin-Key）中间件；`UpdateRuntime` 热更新入口 |
 | `store.go` | Store 接口定义 + AdminStats 类型（SQL Server / SQLite 双实现开关） |
 | `store_impl.go` | 全部 SQL 实现（占位符/日期方言适配） |
 | `placeholders.go` | `?` → `@pN` 方言重写层（MSSQL 兼容核心） |
@@ -226,16 +226,20 @@ VideoDelite/
 | `mailer.go` | SMTP 发信（备选通道，587/465） |
 | `resend.go` | Resend HTTP API 发信（主通道） |
 | `adminui.go` + `adminui.html` | 苹果深色管理台（自包含单文件）：6 统计卡 + SVG 注册趋势 + 事件分布 + 账号管理 |
-| `server_test.go` | 集成测试：全生命周期 + Resend mock（运行时生成密码，零字面量凭据） |
+| `server_test.go` | 集成测试（跑在 Gin 引擎上）：全生命周期 + Resend mock（运行时生成密码，零字面量凭据） |
 
 ### 🚀 cmd/videoserver/ —— 服务端入口
 
 | 文件 | 职责 |
 |---|---|
-| `main.go` | 装配：读配置 → 建库 → 开服务 |
-| `config.go` | config.json 解析 + 环境变量覆盖（Docker 友好） |
-| `config.json` | 真实运行配置（**gitignore**，含密码/Key） |
+| `main.go` | 装配：Viper 读配置 → 建库 → 挂热更新监听 → 带 Read/Write 超时的 http.Server |
+| `config.go` | **Viper 配置**：config.json + `VIDEODELITE_*` 环境变量（优先级更高）+ 默认值；`WatchConfig` 热更新（adminKey/邮件/邀请码开关改文件即生效，免重启）；连接串/监听地址属重启型 |
+| `config.json` | 真实运行配置（**gitignore**，含密码/Key；服务器上挂载进容器支持热更新） |
 | `config.example.json` | 模板：含 Cloudflare DNS 步骤注释（可提交） |
+
+> **依赖新增（r3.1，生产已部署验证）**：服务端引入 **Gin**（HTTP 框架，+3MB 仅影响服务端镜像）与 **Viper**（配置+热更新）。客户端体积不受影响。
+> **热更新实测**：改服务器 `config/config.json` 的 adminKey → **4 秒内免重启生效**（旧 key 403 / 新 key 200 / 恢复 200）。
+> **热更新已知坑**：容器**单文件** bind-mount 绑定 inode，`sed -i` 换 inode 后容器读到的永远是旧内容 —— 必须挂载**目录**（`./config:/config:ro`），且应用层每 2 秒轮询直读文件（fsnotify 对该场景同样失效）。
 
 ### 🐳 Linux 部署 / 📦 build / 🧰 installer / 🧪 tools
 

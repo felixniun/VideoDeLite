@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/gin-gonic/gin"
 )
 
 type Options struct {
@@ -66,33 +68,63 @@ func hexEncode(b []byte) string {
 	return string(out)
 }
 
-// Routes returns the HTTP handler.
+// UpdateRuntime hot-applies configuration changes (Viper file watch):
+// admin key, invite flag, dev-echo and mailer swap. Fields that cannot move
+// safely at runtime (listen, DB pool, JWT secret file) are ignored here.
+// Locking reuses the Server mutex shared with the dev-echo map.
+func (s *Server) UpdateRuntime(opts Options, mailer Mailer) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.opts.InviteRequired = opts.InviteRequired
+	s.opts.DevEchoMail = opts.DevEchoMail
+	s.opts.Mailer = mailer
+	if opts.AdminKey != "" {
+		h := sha256.Sum256([]byte(opts.AdminKey))
+		s.adminKeySHA = hexEncode(h[:])
+	}
+}
+
+// Routes returns the HTTP handler (Gin engine, release mode).
 func (s *Server) Routes() http.Handler {
-	mux := http.NewServeMux()
+	gin.SetMode(gin.ReleaseMode)
+	r := gin.New()
+	r.Use(gin.Recovery())
 
-	mux.HandleFunc("POST /api/v1/accounts/register", s.handleRegister)
-	mux.HandleFunc("POST /api/v1/accounts/verify-email", s.handleVerifyEmail)
-	mux.HandleFunc("POST /api/v1/accounts/resend-verification", s.handleResendVerification)
-	mux.HandleFunc("POST /api/v1/auth/login", s.handleLogin)
-	mux.HandleFunc("POST /api/v1/auth/refresh", s.handleRefresh)
-	mux.HandleFunc("POST /api/v1/auth/logout", s.handleLogout)
-	mux.HandleFunc("POST /api/v1/devices/activate", s.authed(s.handleActivate))
-	mux.HandleFunc("GET /api/v1/devices", s.authed(s.handleListDevices))
-	mux.HandleFunc("DELETE /api/v1/devices/{id}", s.authed(s.handleDeactivateDevice))
-	mux.HandleFunc("GET /api/v1/license/status", s.authed(s.handleLicenseStatus))
-	mux.HandleFunc("POST /api/v1/accounts/me/delete", s.authed(s.handleDeleteAccount))
-	mux.HandleFunc("GET /api/v1/version", s.handleVersion)
+	// wrap adapts legacy net/http handlers (business logic unchanged).
+	wrap := func(h http.HandlerFunc) gin.HandlerFunc {
+		return func(c *gin.Context) { h(c.Writer, c.Request) }
+	}
 
-	// admin
-	mux.HandleFunc("GET /admin", s.handleAdminUI)
-	mux.HandleFunc("GET /api/v1/admin/stats", s.admin(s.handleAdminStats))
-	mux.HandleFunc("GET /api/v1/admin/accounts", s.admin(s.handleAdminAccounts))
-	mux.HandleFunc("POST /api/v1/admin/accounts/{id}/ban", s.admin(s.handleAdminBan(true)))
-	mux.HandleFunc("POST /api/v1/admin/accounts/{id}/unban", s.admin(s.handleAdminBan(false)))
-	mux.HandleFunc("POST /api/v1/admin/accounts/{id}/revoke-licenses", s.admin(s.handleAdminRevoke))
-	mux.HandleFunc("GET /api/v1/admin/security-events", s.admin(s.handleAdminEvents))
+	// public
+	r.POST("/api/v1/accounts/register", wrap(s.handleRegister))
+	r.POST("/api/v1/accounts/verify-email", wrap(s.handleVerifyEmail))
+	r.POST("/api/v1/accounts/resend-verification", wrap(s.handleResendVerification))
+	r.POST("/api/v1/auth/login", wrap(s.handleLogin))
+	r.POST("/api/v1/auth/refresh", wrap(s.handleRefresh))
+	r.POST("/api/v1/auth/logout", wrap(s.handleLogout))
+	r.GET("/api/v1/version", wrap(s.handleVersion))
 
-	return mux
+	// authenticated (bearer)
+	authed := r.Group("/api/v1", s.ginAuthed())
+	authed.POST("/devices/activate", wrap2(s.handleActivate))
+	authed.GET("/devices", wrap2(s.handleListDevices))
+	authed.DELETE("/devices/:id", s.handleDeactivateDevice)
+	authed.GET("/license/status", wrap2(s.handleLicenseStatus))
+	authed.POST("/accounts/me/delete", wrap2(s.handleDeleteAccount))
+
+	// admin (X-Admin-Key)
+	adm := r.Group("/api/v1/admin", s.ginAdmin())
+	adm.GET("/stats", wrap(s.handleAdminStats))
+	adm.GET("/accounts", wrap(s.handleAdminAccounts))
+	adm.GET("/security-events", wrap(s.handleAdminEvents))
+	adm.POST("/accounts/:id/ban", s.handleAdminBanGin(true))
+	adm.POST("/accounts/:id/unban", s.handleAdminBanGin(false))
+	adm.POST("/accounts/:id/revoke-licenses", s.handleAdminRevoke)
+
+	// admin UI (static, self-contained)
+	r.GET("/admin", wrap(s.handleAdminUI))
+
+	return r
 }
 
 // ---- helpers ----
@@ -115,37 +147,51 @@ func readBody(r *http.Request, dst any) error {
 	return dec.Decode(dst)
 }
 
-type authedHandler func(w http.ResponseWriter, r *http.Request, accountID int64)
-
-func (s *Server) authed(h authedHandler) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := s.bearerAuth(r)
-		if err != nil {
-			fail(w, http.StatusUnauthorized, "unauthorized")
-			return
-		}
-		acc, err := s.store.GetAccountByID(r.Context(), id)
-		if err != nil || acc.Status == "banned" || acc.Status == "deleted" {
-			fail(w, http.StatusForbidden, "account unavailable")
-			return
-		}
-		h(w, r, id)
+// wrap2 adapts the (w, r, accountID) authed handler family to gin.
+func wrap2(h func(w http.ResponseWriter, r *http.Request, accountID int64)) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		h(c.Writer, c.Request, c.MustGet(ctxAccountID).(int64))
 	}
 }
 
-func (s *Server) admin(h http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+const ctxAccountID = "vdAccountID"
+
+// ginAuthed validates the bearer token and account status, stores the
+// account id in the gin context, then chains to the handler.
+func (s *Server) ginAuthed() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id, err := s.bearerAuth(c.Request)
+		if err != nil {
+			fail(c.Writer, http.StatusUnauthorized, "unauthorized")
+			c.Abort()
+			return
+		}
+		acc, err := s.store.GetAccountByID(c.Request.Context(), id)
+		if err != nil || acc.Status == "banned" || acc.Status == "deleted" {
+			fail(c.Writer, http.StatusForbidden, "account unavailable")
+			c.Abort()
+			return
+		}
+		c.Set(ctxAccountID, id)
+		c.Next()
+	}
+}
+
+// ginAdmin validates the X-Admin-Key header against the configured key.
+func (s *Server) ginAdmin() gin.HandlerFunc {
+	return func(c *gin.Context) {
 		if s.adminKeySHA == "" {
-			fail(w, http.StatusForbidden, "admin disabled")
+			fail(c.Writer, http.StatusForbidden, "admin disabled")
+			c.Abort()
 			return
 		}
-		key := r.Header.Get("X-Admin-Key")
-		hk := sha256.Sum256([]byte(key))
+		hk := sha256.Sum256([]byte(c.GetHeader("X-Admin-Key")))
 		if hexEncode(hk[:]) != s.adminKeySHA {
-			fail(w, http.StatusForbidden, "invalid admin key")
+			fail(c.Writer, http.StatusForbidden, "invalid admin key")
+			c.Abort()
 			return
 		}
-		h(w, r)
+		c.Next()
 	}
 }
 
@@ -513,15 +559,16 @@ func (s *Server) handleListDevices(w http.ResponseWriter, r *http.Request, accou
 	writeJSON(w, 200, jsonBody{"devices": out})
 }
 
-func (s *Server) handleDeactivateDevice(w http.ResponseWriter, r *http.Request, accountID int64) {
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+func (s *Server) handleDeactivateDevice(c *gin.Context) {
+	accountID := c.MustGet(ctxAccountID).(int64)
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
-		fail(w, 400, "invalid device id")
+		fail(c.Writer, 400, "invalid device id")
 		return
 	}
-	devs, err := s.store.ListDevices(r.Context(), accountID)
+	devs, err := s.store.ListDevices(c.Request.Context(), accountID)
 	if err != nil {
-		fail(w, 500, "list failed")
+		fail(c.Writer, 500, "list failed")
 		return
 	}
 	mine := false
@@ -532,11 +579,11 @@ func (s *Server) handleDeactivateDevice(w http.ResponseWriter, r *http.Request, 
 		}
 	}
 	if !mine {
-		fail(w, 404, "device not found")
+		fail(c.Writer, 404, "device not found")
 		return
 	}
-	_ = s.store.SetDeviceStatus(r.Context(), id, "revoked")
-	writeJSON(w, 200, jsonBody{"ok": true})
+	_ = s.store.SetDeviceStatus(c.Request.Context(), id, "revoked")
+	writeJSON(c.Writer, 200, jsonBody{"ok": true})
 }
 
 func (s *Server) handleLicenseStatus(w http.ResponseWriter, r *http.Request, accountID int64) {
@@ -619,41 +666,41 @@ func (s *Server) handleAdminAccounts(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, jsonBody{"accounts": accs})
 }
 
-func (s *Server) handleAdminBan(ban bool) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+func (s *Server) handleAdminBanGin(ban bool) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 		if err != nil {
-			fail(w, 400, "invalid id")
+			fail(c.Writer, 400, "invalid id")
 			return
 		}
 		status := "active"
 		if ban {
 			status = "banned"
 		}
-		if err := s.store.SetAccountStatus(r.Context(), id, status); err != nil {
-			fail(w, 500, "update failed")
+		if err := s.store.SetAccountStatus(c.Request.Context(), id, status); err != nil {
+			fail(c.Writer, 500, "update failed")
 			return
 		}
 		if ban {
-			_ = s.store.RevokeAllRefreshTokens(r.Context(), id)
-			_ = s.store.LogSecurityEvent(r.Context(), id, "account_banned", "")
+			_ = s.store.RevokeAllRefreshTokens(c.Request.Context(), id)
+			_ = s.store.LogSecurityEvent(c.Request.Context(), id, "account_banned", "")
 		}
-		writeJSON(w, 200, jsonBody{"ok": true, "status": status})
+		writeJSON(c.Writer, 200, jsonBody{"ok": true, "status": status})
 	}
 }
 
-func (s *Server) handleAdminRevoke(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+func (s *Server) handleAdminRevoke(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
-		fail(w, 400, "invalid id")
+		fail(c.Writer, 400, "invalid id")
 		return
 	}
-	if err := s.store.RevokeAccountLicenses(r.Context(), id); err != nil {
-		fail(w, 500, "revoke failed")
+	if err := s.store.RevokeAccountLicenses(c.Request.Context(), id); err != nil {
+		fail(c.Writer, 500, "revoke failed")
 		return
 	}
-	_ = s.store.LogSecurityEvent(r.Context(), id, "license_revoked_by_admin", "")
-	writeJSON(w, 200, jsonBody{"ok": true})
+	_ = s.store.LogSecurityEvent(c.Request.Context(), id, "license_revoked_by_admin", "")
+	writeJSON(c.Writer, 200, jsonBody{"ok": true})
 }
 
 func (s *Server) handleAdminEvents(w http.ResponseWriter, r *http.Request) {

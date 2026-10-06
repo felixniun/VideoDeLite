@@ -2,107 +2,172 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/spf13/viper"
+
 	"videodelite/server"
 )
 
-// Config is the server configuration file (config.json).
+// Config is the server configuration (config.json), loaded through Viper.
+//
+// Precedence (highest first):
+//  1. environment variables (VIDEODELITE_*, bound explicitly below)
+//  2. config.json
+//  3. built-in defaults
+//
+// Hot reload: viper.WatchConfig() in main() applies compatible changes at
+// runtime (admin key, mail provider/keys, invite flag) without restart.
+// Restart-only fields: listen, db.connection (a live SQL pool cannot be
+// swapped safely), jwtSecretFile.
 //
 // Deployment notes: keep production secrets out of source control. For a
-// future public/internet deployment, only the fields below change — the
-// binary is identical:
-//
-//	listen           公网监听地址，如 ":443"（配合反向代理终止 TLS）
-//	db.connection    外网 SQL Server 连接串（建议启用 encrypt=true）
-//	admin.key        管理后台密钥（必须设置强随机值）
-//	auth.secret_file JWT 签名密钥文件路径（多实例部署需共享存储）
-// MailConfig selects the verification-email provider.
-//   - provider ""      → dev-echo（验证码由注册响应返回，仅测试）
-//   - provider "resend" → Resend HTTP API（推荐；需在 Cloudflare 配置 DNS 记录）
-//   - provider "smtp"   → 直连 SMTP（587 STARTTLS / 465 TLS）
+// future public/internet deployment, only the values change — the binary
+// is identical.
 type MailConfig struct {
-	Provider string     `json:"provider"`
-	From     string     `json:"from"`  // "VideoDelite <noreply@mail.yourdomain.com>"
-	APIKey   string     `json:"apiKey"` // Resend API key
-	SMTP     SMTPConfig `json:"smtp"`
+	Provider string     `mapstructure:"provider"`
+	From     string     `mapstructure:"from"` // "VideoDelite <noreply@mail.yourdomain.com>"
+	APIKey   string     `mapstructure:"apiKey"`
+	SMTP     SMTPConfig `mapstructure:"smtp"`
 }
 
 type SMTPConfig = server.SMTPConfig
 
+type DBConfig struct {
+	Connection   string `mapstructure:"connection"`
+	AutoCreateDB bool   `mapstructure:"autoCreateDatabase"`
+}
+
 type Config struct {
-	Listen string `json:"listen"`
-	DB     struct {
-		// SQL Server (production, plan §67):
-		//   sqlserver://sa:password@192.168.100.101:1433?database=videodelite&encrypt=disable
-		// encrypt: disable = 内网测试；外网必须 true 并配置证书
-		Connection   string `json:"connection"`
-		AutoCreateDB bool   `json:"autoCreateDatabase"`
-	} `json:"db"`
-	Mail           MailConfig `json:"mail"`
-	InviteRequired bool       `json:"inviteRequired"`
-	DevEchoMail    bool       `json:"devEchoMail"` // DEV ONLY: verification code returned in response
-	AdminKey       string     `json:"adminKey"`
-	JWTSecretFile  string     `json:"jwtSecretFile"`
-	AccessTTLMin   int        `json:"accessTtlMinutes"`
-	RefreshTTLDays int        `json:"refreshTtlDays"`
+	Listen         string     `mapstructure:"listen"`
+	DB             DBConfig   `mapstructure:"db"`
+	Mail           MailConfig `mapstructure:"mail"`
+	InviteRequired bool       `mapstructure:"inviteRequired"`
+	DevEchoMail    bool       `mapstructure:"devEchoMail"`
+	AdminKey       string     `mapstructure:"adminKey"`
+	JWTSecretFile  string     `mapstructure:"jwtSecretFile"`
+	AccessTTLMin   int        `mapstructure:"accessTtlMinutes"`
+	RefreshTTLDays int        `mapstructure:"refreshTtlDays"`
 }
 
-// defaultConfig reflects the current TEST deployment (internal network).
-func defaultConfig() *Config {
-	c := &Config{
-		Listen:         ":8800",
-		InviteRequired: false,
-		DevEchoMail:    false,
-		JWTSecretFile:  "jwt.secret",
-		AccessTTLMin:   15,
-		RefreshTTLDays: 30,
-	}
-	c.DB.AutoCreateDB = true
-	return c
+// RuntimeFields are the config parts that can be applied to a live server
+// without a restart (hot reload).
+func (c *Config) runtimeOptions() (server.Options, server.Mailer) {
+	return server.Options{
+		InviteRequired: c.InviteRequired,
+		DevEchoMail:    c.DevEchoMail,
+		AdminKey:       c.AdminKey,
+	}, buildMailer(c.Mail)
 }
 
-func loadConfig() (*Config, error) {
-	cfg := defaultConfig()
-
-	configPath := flag.String("config", "config.json", "configuration file path")
+// loadConfig initializes Viper from the config file plus environment
+// overrides, applies defaults, and returns the effective configuration.
+// The returned watch function re-applies runtime fields on file changes.
+func loadConfig() (*Config, func(*server.Server), error) {
+	// Config file path: -config flag > VIDEODELITE_CONFIG > ./config.json.
+	// The file is OPTIONAL: Docker deployments may configure purely via env.
+	configPath := flag.String("config", "", "configuration file path (optional)")
 	flag.Parse()
+	if *configPath == "" {
+		*configPath = os.Getenv("VIDEODELITE_CONFIG")
+	}
+	if *configPath == "" {
+		*configPath = "config.json"
+	}
 
-	if raw, err := os.ReadFile(*configPath); err == nil {
-		if err := json.Unmarshal(raw, cfg); err != nil {
-			return nil, fmt.Errorf("parse %s: %w", *configPath, err)
+	v := viper.New()
+	v.SetConfigFile(*configPath)
+	v.SetConfigType("json")
+
+	// Defaults
+	v.SetDefault("listen", ":8800")
+	v.SetDefault("db.autoCreateDatabase", true)
+	v.SetDefault("jwtSecretFile", "jwt.secret")
+	v.SetDefault("accessTtlMinutes", 15)
+	v.SetDefault("refreshTtlDays", 30)
+	v.SetDefault("devEchoMail", false)
+
+	// Environment overrides. Legacy names keep working:
+	v.SetEnvPrefix("VIDEODELITE")
+	v.AutomaticEnv()
+	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+	_ = v.BindEnv("db.connection", "VIDEODELITE_DB_CONN")
+	_ = v.BindEnv("adminKey", "VIDEODELITE_ADMIN_KEY")
+	_ = v.BindEnv("listen", "VIDEODELITE_LISTEN")
+	_ = v.BindEnv("mail.provider", "VIDEODELITE_MAIL_PROVIDER")
+	_ = v.BindEnv("mail.from", "VIDEODELITE_MAIL_FROM")
+	_ = v.BindEnv("mail.apiKey", "VIDEODELITE_MAIL_APIKEY")
+	_ = v.BindEnv("inviteRequired", "VIDEODELITE_INVITE_REQUIRED")
+	_ = v.BindEnv("jwtSecretFile", "VIDEODELITE_JWT_SECRET_FILE")
+
+	if err := v.ReadInConfig(); err != nil {
+		// Missing file is fine (env/defaults still apply); syntax errors are
+		// fatal so a broken edit never rolls out silently.
+		var pe *os.PathError
+		if errors.As(err, &pe) && os.IsNotExist(pe.Err) {
+			fmt.Println("[config] no config file, using env/defaults:", *configPath)
+		} else {
+			return nil, nil, fmt.Errorf("read config %s: %w", *configPath, err)
 		}
-	} else if *configPath != "" && !os.IsNotExist(err) {
-		return nil, err
 	}
 
-	// Environment overrides (12-factor friendly; used by the Docker image).
-	if v := os.Getenv("VIDEODELITE_DB_CONN"); v != "" {
-		cfg.DB.Connection = v
+	var cfg Config
+	if err := v.Unmarshal(&cfg); err != nil {
+		return nil, nil, fmt.Errorf("parse config: %w", err)
 	}
-	if v := os.Getenv("VIDEODELITE_ADMIN_KEY"); v != "" {
-		cfg.AdminKey = v
+
+	watch := func(srv *server.Server) {
+		// Hot reload via polling (every 2s, direct file read). fsnotify's
+		// watch on a single-file docker bind-mount misses sed -i style
+		// inode replacements; polling reads the path fresh every tick and
+		// works with any edit method. Only runtime fields are compared.
+		go func() {
+			path := *configPath
+			signature := ""
+			first := true
+			for {
+				time.Sleep(2 * time.Second)
+				data, err := os.ReadFile(path)
+				if err != nil {
+					continue
+				}
+				var next Config
+				if err := json.Unmarshal(data, &next); err != nil {
+					continue // broken edit: keep last good config
+				}
+				sig := fmt.Sprintf("%s|%s|%s|%v|%v",
+					next.AdminKey, next.Mail.Provider, next.Mail.APIKey,
+					next.InviteRequired, next.DevEchoMail)
+				if first {
+					signature, first = sig, false
+					continue
+				}
+				if sig != signature {
+					signature = sig
+					opts, mailer := next.runtimeOptions()
+					srv.UpdateRuntime(opts, mailer)
+					fmt.Println("[config] hot reload applied (admin key / mail / invite flag)")
+				}
+			}
+		}()
 	}
-	if v := os.Getenv("VIDEODELITE_LISTEN"); v != "" {
-		cfg.Listen = v
+	return &cfg, watch, nil
+}
+
+// buildMailer selects the verification-email sender. nil = dev-echo.
+func buildMailer(m MailConfig) server.Mailer {
+	switch m.Provider {
+	case "resend":
+		return server.NewResendMailer(m.APIKey, m.From)
+	case "smtp":
+		return server.NewSMTPMailer(m.SMTP)
 	}
-	if v := os.Getenv("VIDEODELITE_MAIL_PROVIDER"); v != "" {
-		cfg.Mail.Provider = v
-	}
-	if v := os.Getenv("VIDEODELITE_MAIL_FROM"); v != "" {
-		cfg.Mail.From = v
-	}
-	if v := os.Getenv("VIDEODELITE_MAIL_APIKEY"); v != "" {
-		cfg.Mail.APIKey = v
-	}
-	if v := os.Getenv("VIDEODELITE_INVITE_REQUIRED"); v == "1" || strings.EqualFold(v, "true") {
-		cfg.InviteRequired = true
-	}
-	return cfg, nil
+	return nil
 }
 
 // ensureDatabase creates the target database when missing (test convenience;
@@ -127,6 +192,6 @@ func ensureDatabase(conn string) error {
 	if err := st.CreateDatabaseIfMissing(dbName); err != nil {
 		return err
 	}
-	time.Sleep(500 * time.Millisecond) // let the new DB become visible
+	time.Sleep(500 * time.Millisecond)
 	return nil
 }
