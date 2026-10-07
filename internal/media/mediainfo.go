@@ -3,6 +3,7 @@
 package media
 
 import (
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -107,7 +108,9 @@ type ffprobeOutput struct {
 		Tags     map[string]string `json:"tags"`
 		SideDataList []struct {
 			SideDataType string `json:"side_data_type"`
-			Rotation     string `json:"rotation"`
+			// ffprobe emits rotation as a number on some builds/streams and
+			// as a string on others; any + flexible parse handles both.
+			Rotation any `json:"rotation"`
 		} `json:"side_data_list"`
 		Disposition map[string]int `json:"disposition"`
 	} `json:"streams"`
@@ -116,8 +119,21 @@ type ffprobeOutput struct {
 	} `json:"chapters"`
 }
 
-func parseFPS(v string) float64 {
-	parts := strings.Split(v, "/")
+// sideDataString normalizes ffprobe side-data values that may arrive as
+// strings, numbers, or json.Number depending on the ffprobe build/stream.
+func sideDataString(v any) string {
+	switch t := v.(type) {
+	case string:
+		return t
+	case float64:
+		return strconv.FormatFloat(t, 'f', -1, 64)
+	case json.Number:
+		return t.String()
+	}
+	return ""
+}
+
+func parseFPS(v string) float64 {	parts := strings.Split(v, "/")
 	if len(parts) != 2 {
 		f, _ := strconv.ParseFloat(v, 64)
 		return f
@@ -197,8 +213,8 @@ func fromFFprobe(path string, fileSize int64, raw *ffprobeOutput) *MediaInfo {
 				}
 				v.FPS = fps
 				for _, sd := range s.SideDataList {
-					if sd.SideDataType == "Display Matrix" && sd.Rotation != "" {
-						if r, err := strconv.ParseFloat(sd.Rotation, 64); err == nil {
+					if sd.SideDataType == "Display Matrix" && sideDataString(sd.Rotation) != "" {
+						if r, err := strconv.ParseFloat(sideDataString(sd.Rotation), 64); err == nil {
 							v2 := int(r) % 360
 							if v2 < 0 {
 								v2 += 360

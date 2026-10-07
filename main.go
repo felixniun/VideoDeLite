@@ -38,6 +38,15 @@ func main() {
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
+		// Native drag & drop: OnFileDrop in the frontend delivers real file
+		// paths (WebView2's HTML5 File objects carry no path, which is why
+		// plain HTML5 drop handlers cannot import files).
+		DragAndDrop: &options.DragAndDrop{
+			EnableFileDrop:     true,
+			DisableWebViewDrop: true,
+			CSSDropProperty:    "--wails-drop-target",
+			CSSDropValue:       "drop",
+		},
 		OnStartup:  app.startup,
 		OnShutdown: app.shutdown,
 		Bind: []interface{}{

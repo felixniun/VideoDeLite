@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { call } from '../services/wails'
 import { useAppStore } from '../stores/app'
 import { useTaskStore } from '../stores/tasks'
@@ -214,6 +214,23 @@ function onDrop(e: DragEvent) {
   }
   importPaths(paths)
 }
+
+// Wails native file drop (main.go enables options.DragAndDrop): the runtime
+// delivers REAL absolute paths — WebView2's HTML5 File objects carry only a
+// file name, which is why the old HTML5 handler could not import files.
+// useDropTarget=true restricts drops to the element marked with
+// --wails-drop-target: drop (the dropzone below).
+onMounted(() => {
+  const rt = (window as any).runtime
+  if (rt?.OnFileDrop) {
+    rt.OnFileDrop((_x: number, _y: number, paths: string[]) => {
+      if (paths?.length) importPaths(paths)
+    }, true)
+  }
+})
+onUnmounted(() => {
+  ;(window as any).runtime?.OnFileDropOff?.()
+})
 
 async function start() {
   if (files.value.length === 0) return
@@ -528,6 +545,7 @@ function fmtDuration(sec: number): string {
 }
 
 .dropzone {
+  --wails-drop-target: drop; /* Wails native drag-drop target marker */
   background: var(--card);
   border: 2px dashed var(--separator);
   border-radius: var(--radius-xl);
