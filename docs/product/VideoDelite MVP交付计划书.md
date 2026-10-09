@@ -4,7 +4,9 @@
 > **产品名称：** VideoDelite
 > **交付版本：** v1.0.0-mvp-r3（新增：Debian Docker 生产部署、HTTPS 域名接入、QA 修复全记录）
 > **交付日期：** 2026-10-04
-> **学习指南：** 配套《docs/学习指南-从零到上线.md》（小白向完整复盘）
+> **学习指南：** 配套《docs/guides/学习指南-从零到上线.md》（小白向完整复盘）
+>
+> **状态说明（2026-10-09）：** 本文记录 2026-10-04 的交付快照。当前代码中的普通桌面运行状态仍为未授权，前端提示 Professional 许可尚未开放；请以仓库根目录 README 和当前实现为准。
 
 ---
 
@@ -114,7 +116,7 @@
 
 ### 4.3 媒体保留 QA（§135，tools/qamatrix 实测）
 
-**10/10 PASS**（HDR10 色彩标记、10-bit、双音轨+语言、字幕、章节、旋转）。报告：`docs/QA-PRESERVATION.md`
+**10/10 PASS**（HDR10 色彩标记、10-bit、双音轨+语言、字幕、章节、旋转）。报告：`docs/reports/QA-PRESERVATION.md`
 
 ### 4.4 稳定性 QA（§115–§116）
 
@@ -239,10 +241,10 @@ VideoDelite/
 │   └── genicon/main.go                # 图标生成器
 │
 ├── 📚 docs/
-│   ├── 规划/  VideoLite计划书 + 授权状态机规范 + 边界规范 + MVP交付计划书（本文档）
-│   ├── 学习指南-从零到上线.md              # 20 个真实坑复盘（小白向）
-│   ├── DEPLOY-DEBIAN.md                   # 服务器部署手册
-│   ├── TECHNICAL-VALIDATION.md / QA-PRESERVATION.md   # 实测报告 × 2
+│   ├── product/      # 产品需求、账号边界、授权状态机、MVP 交付记录
+│   ├── guides/       # 学习指南与仓库结构导览
+│   ├── operations/   # 服务端部署手册
+│   ├── reports/     # 技术验证与媒体保留 QA
 │   └── RELEASE-NOTES.md / PRIVACY-POLICY.md
 │
 ├── 🐧 debian/                       # 【本地 gitignore】服务器部署副本（含真实凭据）
@@ -362,13 +364,14 @@ VideoDelite/
 
 | 文件 | 职责 |
 |---|---|
-| `docs/规划/VideoLite计划书.md` | 产品宪法（140 章冻结需求） |
-| `docs/规划/授权状态机规范.md` | 8 态状态机规则 |
-| `docs/规划/账号与本地压缩边界规范.md` | 账号域/视频域隔离 |
-| `docs/规划/VideoDelite MVP交付计划书.md` | 本文档 |
-| `docs/学习指南-从零到上线.md` | 小白复盘：20 个真实坑（现象→根因→解决→教训） |
-| `docs/DEPLOY-DEBIAN.md` | 服务器部署手册（镜像加速/防火墙/HTTPS/排障） |
-| `docs/TECHNICAL-VALIDATION.md`、`QA-PRESERVATION.md` | 两份实测报告 |
+| `docs/product/VideoLite计划书.md` | 产品需求与冻结规则 |
+| `docs/product/VideoLite V1 授权状态机规范.md` | 授权状态机规则 |
+| `docs/product/VideoLite 账号与本地压缩边界规范.md` | 账号域 / 视频域隔离 |
+| `docs/product/VideoDelite MVP交付计划书.md` | 本文档（2026-10-04 交付快照） |
+| `docs/guides/学习指南-从零到上线.md` | 开发与部署经验复盘 |
+| `docs/guides/PROJECT-STRUCTURE.md` | 当前仓库结构导览 |
+| `docs/operations/DEPLOY-DEBIAN.md` | 服务器部署手册 |
+| `docs/reports/TECHNICAL-VALIDATION.md`、`QA-PRESERVATION.md` | 两份实测报告 |
 | `docs/RELEASE-NOTES.md`、`PRIVACY-POLICY.md` | 版本说明 / 隐私政策 |
 | `.gitignore` / `.dockerignore` / `.zcodeignore` | 排除凭据/产物/缓存/服务器副本 |
 
