@@ -23,7 +23,12 @@ if (-not (Test-Path $PfxPath)) {
 }
 
 $sec = ConvertTo-SecureString -String $PfxPassword -Force -AsPlainText
-$imported = Import-PfxCertificate -FilePath $PfxPath -CertStoreLocation "Cert:\CurrentUser\My" -Password $sec
+# Load the private key only for this process. Importing into CurrentUser\My
+# fails in restricted environments and needlessly changes the user's store.
+$flags = [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::EphemeralKeySet
+$signingCert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new(
+    (Resolve-Path $PfxPath).Path, $PfxPassword, $flags)
+if (-not $signingCert.HasPrivateKey) { throw "signing certificate has no private key" }
 
 $targets = @()
 if ($Files -ne "") { $targets = $Files.Split(",") } else {
@@ -32,14 +37,15 @@ if ($Files -ne "") { $targets = $Files.Split(",") } else {
 $signed = 0
 foreach ($f in $targets) {
     if (-not (Test-Path $f)) { Write-Host "skip missing $f"; continue }
-    $status = Set-AuthenticodeSignature -FilePath $f -Certificate $imported `
+    $status = Set-AuthenticodeSignature -FilePath $f -Certificate $signingCert `
         -HashAlgorithm SHA256 -IncludeChain All
     if ($status.Status -in @("Valid", "UnknownError") -and $status.SignerCertificate) {
         # UnknownError with SignerCertificate = untrusted self-signed chain (expected for test cert)
         Write-Host "SIGNED $f  ($($status.Status), thumb $($status.SignerCertificate.Thumbprint))"
         $signed++
     } else {
-        Write-Host "FAILED $f status=$($status.Status) msg=$($status.StatusMessage)"
+        throw "FAILED $f status=$($status.Status) msg=$($status.StatusMessage)"
     }
 }
+$signingCert.Dispose()
 Write-Host "signed $signed file(s)"

@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useTaskStore } from '../stores/tasks'
 import { call } from '../services/wails'
 import { t } from '../i18n'
 import type { TaskView } from '../types'
 
 const tasks = useTaskStore()
+const revealErrors = ref<Record<string, string>>({})
 
 const stateKey: Record<string, string> = {
   Waiting: 'tasks.waiting',
@@ -49,8 +50,14 @@ function fmtSize(bytes: number): string {
   return Math.max(1, Math.round(bytes / 1024)) + ' KB'
 }
 
-async function reveal(path: string) {
-  try { await call('RevealPath', path) } catch { /* noop */ }
+async function reveal(taskId: string, path: string) {
+  try {
+    await call('RevealPath', path)
+    delete revealErrors.value[taskId]
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err)
+    revealErrors.value[taskId] = `${t('tasks.revealFailed')}: ${detail}`
+  }
 }
 </script>
 
@@ -103,6 +110,8 @@ async function reveal(path: string) {
         <div v-for="(w, i) in task.warnings" :key="i" class="warning-line">⚠ {{ w }}</div>
       </div>
 
+      <div v-if="revealErrors[task.id]" class="task-error">{{ revealErrors[task.id] }}</div>
+
       <div class="task-actions">
         <template v-if="task.state === 'Encoding'">
           <button class="btn btn-secondary btn-sm" @click="tasks.pause(task.id)">{{ t('tasks.pause') }}</button>
@@ -116,7 +125,7 @@ async function reveal(path: string) {
           <button class="btn btn-danger btn-sm" @click="tasks.cancel(task.id)">{{ t('tasks.cancel') }}</button>
         </template>
         <template v-else>
-          <button v-if="task.outputPath" class="btn btn-secondary btn-sm" @click="reveal(task.outputPath)">{{ t('tasks.reveal') }}</button>
+          <button v-if="task.outputPath" class="btn btn-secondary btn-sm" @click="reveal(task.id, task.outputPath)">{{ t('tasks.reveal') }}</button>
           <button v-if="task.state !== 'Completed'" class="btn btn-ghost btn-sm" @click="tasks.retry(task.id)">{{ t('tasks.retry') }}</button>
           <button class="btn btn-ghost btn-sm" @click="tasks.remove(task.id)">{{ t('tasks.remove') }}</button>
         </template>

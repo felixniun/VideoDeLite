@@ -21,7 +21,6 @@ import (
 	"videodelite/internal/logging"
 	"videodelite/internal/media"
 	"videodelite/internal/paths"
-	"videodelite/internal/proc"
 	"videodelite/internal/settings"
 	"videodelite/internal/task"
 )
@@ -286,19 +285,24 @@ func (a *App) PickVideoFiles() ([]string, error) {
 }
 
 func (a *App) RevealPath(path string) error {
-	st, err := os.Stat(path)
+	fullPath, err := filepath.Abs(path)
 	if err != nil {
-		return err
+		return fmt.Errorf("无法解析路径 %q: %w", path, err)
 	}
-	if st.IsDir() {
-		return proc.Command("explorer", path).Start()
+	st, err := os.Stat(fullPath)
+	if err != nil {
+		return fmt.Errorf("找不到输出文件或目录 %q: %w", fullPath, err)
 	}
-	return proc.Command("explorer", "/select,", path).Start()
+	folder := fullPath
+	if !st.IsDir() {
+		folder = filepath.Dir(fullPath)
+	}
+	return openFolder(folder)
 }
 
 // OpenLogFolder opens %LOCALAPPDATA%/VideoDelite/Logs in Explorer.
 func (a *App) OpenLogFolder() error {
-	return proc.Command("explorer", a.p.Logs).Start()
+	return openFolder(a.p.Logs)
 }
 
 // ---------- auth / account ----------

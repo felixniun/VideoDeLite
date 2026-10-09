@@ -34,9 +34,11 @@ func resolveBinary(name string) (string, error) {
 		return "", os.ErrInvalid
 	}
 	if _, err := os.Stat(clean); err != nil {
-		if _, lookErr := exec.LookPath(clean); lookErr != nil {
+		resolved, lookErr := exec.LookPath(clean)
+		if lookErr != nil {
 			return "", err
 		}
+		return resolved, nil
 	}
 	return clean, nil
 }

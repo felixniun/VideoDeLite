@@ -398,17 +398,13 @@ func (m *Manager) Retry(id string) (string, error) {
 }
 
 func (m *Manager) finishCanceled(t *Task) {
-	if t.TempDir != "" {
-		os.RemoveAll(t.TempDir)
-	}
+	m.cleanupTempDir(t.TempDir)
 	m.setState(t, StateCanceled)
 	m.recordHistory(t, "Canceled", "")
 }
 
 func (m *Manager) fail(t *Task, code, message string) {
-	if t.TempDir != "" {
-		os.RemoveAll(t.TempDir)
-	}
+	m.cleanupTempDir(t.TempDir)
 	m.mu.Lock()
 	t.ErrCode = code
 	t.ErrMessage = message
@@ -416,6 +412,30 @@ func (m *Manager) fail(t *Task, code, message string) {
 	m.setState(t, StateFailed)
 	m.recordHistory(t, "Failed", code+": "+message)
 	m.Log.Error(fmt.Sprintf("task %s failed: %s: %s", t.ID, code, message))
+}
+
+// cleanupTempDir removes a task's temporary directory and then removes the
+// shared parent when no other task is using it. os.Remove on the parent is
+// safe under parallel encoding: it only succeeds if the directory is empty.
+func (m *Manager) cleanupTempDir(tempDir string) {
+	if tempDir == "" {
+		return
+	}
+	if err := os.RemoveAll(tempDir); err != nil {
+		m.Log.Warn(fmt.Sprintf("could not remove task temp dir %s: %v", tempDir, err))
+		return
+	}
+	tempRoot := filepath.Dir(tempDir)
+	if filepath.Base(tempRoot) != ".videodelite-temp" {
+		return
+	}
+	if err := os.Remove(tempRoot); err != nil && !os.IsNotExist(err) {
+		// The parent may still contain another active task's temp directory.
+		// Keep it in that case; a later task cleanup will remove it when empty.
+		if entries, readErr := os.ReadDir(tempRoot); readErr == nil && len(entries) == 0 {
+			m.Log.Warn(fmt.Sprintf("could not remove empty temp root %s: %v", tempRoot, err))
+		}
+	}
 }
 
 // ---- the encoding lifecycle ----
@@ -509,6 +529,7 @@ func (m *Manager) runTask(t *Task) {
 	// same-volume rename (§92: per-task temp, cleaned on failure).
 	tempDir := filepath.Join(outDir, ".videodelite-temp", t.ID)
 	if err := os.MkdirAll(tempDir, 0o755); err != nil {
+		m.cleanupTempDir(tempDir)
 		m.fail(t, errs.OutputFileError, "无法创建临时目录: "+err.Error())
 		return
 	}
@@ -625,7 +646,7 @@ func (m *Manager) runTask(t *Task) {
 	if note != "" {
 		m.warn(t, note)
 	}
-	os.RemoveAll(tempDir)
+	m.cleanupTempDir(tempDir)
 	m.mu.Lock()
 	t.OutputPath = placed
 	t.Percent = 1

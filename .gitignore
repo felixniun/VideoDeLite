@@ -35,6 +35,8 @@ debian/
 # build outputs
 build/dist/
 build/cache/
+build/gocache/
+build/tmp/
 # runtime data next to exe
 Data/
 .mimosa/

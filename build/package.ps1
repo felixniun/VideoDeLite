@@ -9,6 +9,12 @@
 $ErrorActionPreference = "Stop"
 $version = "1.0.0"
 
+# Keep Go's build cache inside the project so packaging works in restricted
+# environments and does not depend on a writable profile cache.
+$env:GOCACHE = Join-Path (Get-Location) "build\gocache"
+$env:GOTMPDIR = Join-Path (Get-Location) "build\tmp"
+New-Item -ItemType Directory -Force -Path $env:GOCACHE, $env:GOTMPDIR | Out-Null
+
 Write-Host "== 1/5 wails build ==" -ForegroundColor Cyan
 # -s -w strips debug symbols: ~30% smaller exe, no functional change
 wails build -ldflags "-s -w"
@@ -16,7 +22,8 @@ if ($LASTEXITCODE -ne 0) { throw "wails build failed" }
 
 Write-Host "== 2/5 staging release files ==" -ForegroundColor Cyan
 $stage = "build\dist\app"
-if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
+# The portable build stores its database and WebView profile in app/Data.
+# Refresh program files in place so a rebuild never erases that user data.
 New-Item -ItemType Directory -Force -Path "$stage\bin" | Out-Null
 # makensis needs an absolute stage path
 $stageAbs = (Resolve-Path "build\dist").Path + "\app"
@@ -70,9 +77,17 @@ Get-ChildItem $ffDir -Filter *.dll | ForEach-Object { Copy-Item $_.FullName "$st
 Write-Host "== 3/5 license files ==" -ForegroundColor Cyan
 Copy-Item "installer\THIRD-PARTY-NOTICES.txt" $stage
 
+$devSigningKey = "build\keys\test-signing.pfx"
+if (Test-Path $devSigningKey) {
+    & "build\sign.ps1" -PfxPath $devSigningKey -Files "$stage\VideoDelite.exe"
+}
+
 Write-Host "== 4/5 NSIS installer ==" -ForegroundColor Cyan
 makensis /DVERSION=$version "/DSTAGE=$stageAbs" "installer\installer.nsi"
 if ($LASTEXITCODE -ne 0) { throw "makensis failed" }
+if (Test-Path $devSigningKey) {
+    & "build\sign.ps1" -PfxPath $devSigningKey -Files "build\dist\VideoDelite-$version-setup.exe"
+}
 
 Write-Host "== 5/5 done ==" -ForegroundColor Green
 Get-ChildItem "build\dist" -Filter *.exe | Format-Table Name, Length
